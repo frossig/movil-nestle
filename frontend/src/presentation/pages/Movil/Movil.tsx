@@ -14,6 +14,9 @@ import UndoRoundedIcon from '@mui/icons-material/UndoRounded';
 import TaskAltRoundedIcon from '@mui/icons-material/TaskAltRounded';
 import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
+import ErrorRoundedIcon from '@mui/icons-material/ErrorRounded';
+import { alpha } from '@mui/material/styles';
 import { useMovil, useSoloLectura } from '../../../stores/useMovil';
 import { Estado, Unidad } from '../../../stores/useMovil/useMovil.type';
 import { conUnidad, formatear, nombreMes, UNIDADES } from './formato';
@@ -42,6 +45,7 @@ const ACCIONES: Record<string, string> = {
   porcentaje: 'Cambió la base de cálculo', quitar_input2: 'Sacó los totales por canal',
   asignar_categorias: 'Asignó categorías', heredar: 'Arrancó desde el mes anterior aprobado',
   agregar_entidad: 'Agregó un distribuidor o vendedor', eliminar_entidad: 'Eliminó un distribuidor o vendedor',
+  proponer_pesos: 'Propuso los pesos por canal según los kilos',
   abrir_canal: 'Abrió un canal entre distribuidores o vendedores', cerrar_canal: 'Dejó un canal sin abrir debajo', repartir_diferencia: 'Repartió la diferencia entre los canales',
 };
 
@@ -93,8 +97,14 @@ const TotalesDialog = ({ totales, sugerencia, objetivo, onCerrar }: {
 }) => {
   const { editarTotales, ocupado } = useMovil();
   const [iniciales] = useState<Fila[]>(() => {
-    if (totales) return totales.detalle.map(t => fila({ canal: t.canal, kilos: aTexto(t.kilos), plata: aTexto(t.plata) }));
-    if (sugerencia?.length) return sugerencia.map(t => fila({ canal: t.canal, kilos: aTexto(t.kilos) }));
+    // Pesos vacíos: los del mes anterior, si su archivo los trae.
+    const pesosAnteriores = new Map((sugerencia ?? []).map(t => [claveDeCanal(t.canal), aTexto(t.plata)]));
+    if (totales) {
+      return totales.detalle.map(t => fila({
+        canal: t.canal, kilos: aTexto(t.kilos), plata: aTexto(t.plata) || (pesosAnteriores.get(claveDeCanal(t.canal)) ?? ''),
+      }));
+    }
+    if (sugerencia?.length) return sugerencia.map(t => fila({ canal: t.canal, kilos: aTexto(t.kilos), plata: aTexto(t.plata) }));
     return [fila({ nueva: true })];
   });
   // Lo cargado, por fila, para mostrar "antes: …" y qué canales se sacan (se compara texto: el front no calcula).
@@ -138,7 +148,9 @@ const TotalesDialog = ({ totales, sugerencia, objetivo, onCerrar }: {
       <DialogContent>
         {!totales && (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            {sugerencia?.length
+            {sugerencia?.some(t => t.plata)
+              ? 'Arranca con los canales, los kilos y los pesos que se repartieron el mes anterior. Ajustalos a este mes.'
+              : sugerencia?.length
               ? 'Arranca con los canales y los kilos que se repartieron el mes anterior, del archivo que cargaste. ' +
                 'Ajustalos a este mes y completá los pesos: ese archivo no los trae.'
               : 'Una fila por canal, con sus kilos y sus pesos, como en el Excel. Si primero cargás el mes anterior, ' +
@@ -292,7 +304,8 @@ const Entradas = ({ estado }: { estado: Estado }) => {
   );
 };
 
-const conSku = (p: Estado['problemas'][number]) => (p.sku ? `SKU ${p.sku} · ${p.mensaje}` : p.mensaje);
+const conSku = (p: Estado['problemas'][number]) =>
+  (p.sku ? `SKU ${p.sku}${p.descripcion ? ` (${p.descripcion})` : ''} · ${p.mensaje}` : p.mensaje);
 
 /** "Ir a R1", "Ir al SKU 900…": de un problema al lugar donde se mira. Solo lleva: por eso va sin borde y con flecha. */
 const Ir = ({ destinos }: { destinos: [Foco['tipo'], string][] }) => {
@@ -301,7 +314,7 @@ const Ir = ({ destinos }: { destinos: [Foco['tipo'], string][] }) => {
     <>
       {destinos.map(([tipo, id]) => (
         <Button key={`${tipo}-${id}`} size="small" color="inherit" onClick={() => enfocar(tipo, id)}
-          endIcon={<ArrowForwardRoundedIcon fontSize="small" />} sx={{ whiteSpace: 'nowrap' }}>
+          endIcon={<ArrowForwardRoundedIcon fontSize="small" />} sx={{ whiteSpace: 'nowrap', fontWeight: 400, color: 'text.secondary' }}>
           {tipo === 'sku' ? `Ir al SKU ${id}` : `Ir a ${id}`}
         </Button>
       ))}
@@ -309,13 +322,65 @@ const Ir = ({ destinos }: { destinos: [Foco['tipo'], string][] }) => {
   );
 };
 
-/** Lo que resuelve el aviso: con borde, para que se distinga de "Ir a…" y del texto del aviso. */
+/** Lo que resuelve el aviso: con borde (el tema le da la tinta), para que se distinga de "Ir a…" y del texto. */
 const Resolver = (props: React.ComponentProps<typeof Button>) => (
-  <Button size="small" color="inherit" variant="outlined" {...props} sx={{ whiteSpace: 'nowrap' }} />
+  <Button size="small" variant="outlined" color="primary" {...props} sx={{ whiteSpace: 'nowrap', bgcolor: 'background.paper' }} />
 );
 
-const enLinea = { alignItems: 'center', '& .MuiAlert-action': { pt: 0 } };
+/** La acción principal de una alerta que frena: llena, para que se vea qué hacer primero. */
+const Principal = (props: React.ComponentProps<typeof Button>) => (
+  <Button size="small" variant="contained" {...props} sx={{ whiteSpace: 'nowrap' }} />
+);
+
 const ACCIONES_SX = { display: 'flex', alignItems: 'center', flexWrap: 'nowrap', gap: 0.5 } as const;
+const AMBAR = '#D69E2E';
+
+// El título corto de cada alerta: qué pasa, en dos o tres palabras. El detalle (qué hacer) va abajo.
+const TITULO_INCONSISTENCIA: Record<string, string> = {
+  totales_distintos: 'No coincide con Contraloría', sku_sin_canal: 'SKU sin historia', canal_sin_sku: 'Canal sin historia',
+  canales_sin_volumen: 'Los SKUs no alcanzan', fijado_excede: 'Lo fijado no entra', regla_incumplible: 'Regla que no se cumple',
+  reglas_en_conflicto: 'Reglas que chocan', reglas_superpuestas: 'Reglas superpuestas',
+};
+// ponytail: los problemas del archivo no traen todos un tipo; se reconocen por el texto. Si crecen, que el backend mande el tipo.
+const tituloProblema = (p: Estado['problemas'][number]) => {
+  if (p.tipo === 'sku_repetido') return 'SKU repetido';
+  if (p.tipo === 'sin_categoria') return 'SKUs sin categoría';
+  const m = p.mensaje.toLowerCase();
+  if (m.includes('objetivo en cero')) return 'Objetivo en cero';
+  if (m.includes('otro país')) return 'Producto de otro país';
+  if (m.includes('se repartieron entre los canales')) return 'Se ajustó el redondeo';
+  if (m.includes('decimales')) return 'Decimales de más';
+  if (m.includes('no se puede abrir')) return 'No se abre debajo del canal';
+  if (m.includes('negativo')) return 'Valor negativo en el archivo';
+  return { input1: 'Objetivo de Contraloría', input2: 'Totales por canal', base: 'Mes anterior', apertura: 'Apertura' }[p.bloque ?? '']
+    ?? 'Para revisar';
+};
+
+/** Una alerta de Para revisar: título corto, el SKU si hay uno, qué hacer, y los botones a la derecha. */
+const Alerta = ({ frena, titulo, sku, descripcion, acciones, children }: {
+  frena: boolean; titulo: string; sku?: string | null; descripcion?: string | null; acciones?: React.ReactNode;
+  children: React.ReactNode;
+}) => (
+  <Box role={frena ? 'alert' : undefined} sx={{
+    bgcolor: 'background.paper', border: 1, borderColor: 'divider', borderTop: `3px solid ${frena ? NO_CIERRA : AMBAR}`,
+    px: 2, py: 1.25, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', columnGap: 2, rowGap: 0.25, alignItems: 'center',
+  }}>
+    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.25, flexWrap: 'wrap', minWidth: 0 }}>
+      <Typography variant="body2" fontWeight={700}>{titulo}</Typography>
+      {sku && (
+        <Typography variant="body2" color="text.secondary">
+          <Box component="span" sx={{ fontFamily: 'monospace', color: 'text.primary' }}>{sku}</Box>{descripcion ? ` ${descripcion}` : ''}
+        </Typography>
+      )}
+    </Box>
+    <Box sx={{ ...ACCIONES_SX, gridColumn: 2, gridRow: '1 / span 2' }}>{acciones}</Box>
+    <Typography variant="body2" color="text.secondary" sx={{ gridColumn: 1, minWidth: 0 }}>{children}</Typography>
+  </Box>
+);
+
+const Grupo = ({ children }: { children: React.ReactNode }) => (
+  <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>{children}</Typography>
+);
 
 /** Un SKU repetido en el objetivo de Contraloría: el planner elige cuál fila vale, sin tocar el Excel. */
 const FilaDialog = ({ repetido, onCerrar }: { repetido: Repetido; onCerrar: () => void }) => {
@@ -368,7 +433,8 @@ const Pendientes = ({ estado, unidad, enMatriz }: { estado: Estado; unidad: Unid
   const [repartiendo, setRepartiendo] = useState(false);
   const soloLectura = useSoloLectura();
   const repetido = (sku: string | null) => estado.repetidos.find(r => r.sku === sku);
-  const { enfocar } = useMovil();
+  const { enfocar, elegirUnidad, proponerPesos } = useMovil();
+  const [proponiendo, setProponiendo] = useState(false);
   const acciones = (p: Estado['problemas'][number]) => {
     const r = p.tipo === 'sku_repetido' ? repetido(p.sku) : undefined;
     const celda = p.bloque === 'apertura' && p.sku && p.canal && enMatriz.has(p.sku) ? `${p.sku} · ${p.canal}` : null;
@@ -390,33 +456,73 @@ const Pendientes = ({ estado, unidad, enMatriz }: { estado: Estado; unidad: Unid
   const inconsistencias = estado.inconsistencias[unidad];
   const errores = estado.problemas.filter(p => p.severidad === 'error');
   const avisos = estado.problemas.filter(p => p.severidad !== 'error');
+  // Lo de esta lista es de la unidad elegida en "Ver en": si la otra no cierra, se avisa acá para que no pase de largo.
+  const otra: Unidad = unidad === 'kilos' ? 'plata' : 'kilos';
+  const sinPesos = otra === 'plata' && !!estado.entradas.input2?.detalle.some(t => t.plata == null);
+  const cuantasOtra = estado.inconsistencias[otra].length;
+  // Kilos cerrados y pesos no: los pesos se pueden proponer según los kilos (lo pidieron: armarlos a mano "es un chino").
+  const proponer = estado.cierra.kilos && !estado.cierra.plata && !estado.faltan.length && !soloLectura;
+  const avisoPesos = proponer && (
+    <Alerta frena titulo="Pesos no cierra" acciones={<>
+      <Principal onClick={() => setProponiendo(true)}>Proponer pesos según los kilos</Principal>
+      {unidad === 'kilos' && !sinPesos && <Resolver onClick={() => elegirUnidad('plata')}>Ver en pesos</Resolver>}
+    </>}>
+      {sinPesos ? 'Faltan los pesos de algún canal. ' : 'Los pesos de cada canal no van con sus kilos. '}
+      La herramienta los puede proponer: cada canal se lleva lo que facturan sus kilos, al precio de Contraloría de cada SKU.
+    </Alerta>
+  );
+  const avisoOtra = proponer ? (unidad === 'kilos' && avisoPesos) : !estado.cierra[otra] && !estado.faltan.length && (
+    <Alerta frena titulo={`${UNIDADES[otra].nombre} no cierra`} acciones={!sinPesos && (
+      <Principal onClick={() => elegirUnidad(otra)}>Ver en {UNIDADES[otra].nombre.toLowerCase()}</Principal>
+    )}>
+      {sinPesos ? 'Faltan los pesos de algún canal en Totales por canal.'
+        : cuantasOtra ? `Hay ${cuantasOtra} ${cuantasOtra === 1 ? 'cosa' : 'cosas'} para resolver en ${UNIDADES[otra].nombre.toLowerCase()}.`
+          : `Mirala en ${UNIDADES[otra].nombre.toLowerCase()}.`}
+    </Alerta>
+  );
+  const dialogoPesos = proponiendo && (
+    <MotivoDialog titulo="Proponer pesos según los kilos"
+      descripcion="Los pesos de cada canal pasan a ser lo que facturan sus kilos al precio de Contraloría de cada SKU. Reemplaza los pesos cargados en Totales por canal; se puede deshacer."
+      confirmar="Proponer pesos" onConfirmar={proponerPesos} onCerrar={() => setProponiendo(false)} />
+  );
   if (!inconsistencias.length && !estado.problemas.length && !estado.avisos[unidad].length) {
-    return <Typography color={CIERRA}>Nada para revisar en {UNIDADES[unidad].nombre.toLowerCase()}.</Typography>;
+    return <>{avisoOtra || <Typography color={CIERRA}>Nada para revisar en {UNIDADES[unidad].nombre.toLowerCase()}.</Typography>}{dialogoPesos}</>;
   }
+  const frenan = !!avisoOtra || (unidad === 'plata' && !!avisoPesos) || inconsistencias.length > 0;
+  const hayAvisos = errores.length + avisos.length + estado.avisos[unidad].length > 0;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {dialogoPesos}
+      {frenan && <Grupo>Frenan: hay que resolverlos para aprobar</Grupo>}
+      {avisoOtra}
+      {unidad === 'plata' && avisoPesos}
       {inconsistencias.map((i, n) => (
-        <Alert key={`i${n}`} severity="error" sx={enLinea}
-          action={
-            <Box sx={ACCIONES_SX}>
-              {i.tipo === 'totales_distintos' && !soloLectura && (
-                <Resolver onClick={() => setRepartiendo(true)}>Repartir la diferencia</Resolver>
-              )}
-              {i.tipo === 'sku_sin_canal' && i.skus[0] && (
-                <Resolver aria-label={`Elegir canales de SKU ${i.skus[0]}`} onClick={() => setCanalesDe(i.skus[0])}>
-                  Elegir canales
-                </Resolver>
-              )}
-              <Ir destinos={[...i.reglas.map((r): [Foco['tipo'], string] => ['regla', r]), ...skus(i.skus)]} />
-            </Box>
-          }>
+        <Alerta key={`i${n}`} frena titulo={TITULO_INCONSISTENCIA[i.tipo] ?? `${UNIDADES[unidad].nombre} no cierra`}
+          acciones={<>
+            {i.tipo === 'totales_distintos' && !soloLectura && (
+              <Principal onClick={() => setRepartiendo(true)}>Repartir la diferencia</Principal>
+            )}
+            {i.tipo === 'sku_sin_canal' && i.skus[0] && (
+              <Principal aria-label={`Elegir canales de SKU ${i.skus[0]}`} onClick={() => setCanalesDe(i.skus[0])}>
+                Elegir canales
+              </Principal>
+            )}
+            <Ir destinos={[...i.reglas.map((r): [Foco['tipo'], string] => ['regla', r]), ...skus(i.skus)]} />
+          </>}>
           {i.mensaje}
-        </Alert>
+        </Alerta>
       ))}
-      {/* Rojo solo lo que no cierra; lo del archivo o la apertura no bloquea: amarillo, lo más grave primero. */}
-      {errores.map((p, n) => <Alert key={`e${n}`} severity="warning" sx={enLinea} action={acciones(p)}>{conSku(p)}</Alert>)}
-      {estado.avisos[unidad].map((a, n) => <Alert key={`a${n}`} severity="info">{a}</Alert>)}
-      {avisos.map((p, n) => <Alert key={`p${n}`} severity="warning" sx={enLinea} action={acciones(p)}>{conSku(p)}</Alert>)}
+      {/* Lo del archivo o la apertura no bloquea: aviso, lo más grave primero. */}
+      {hayAvisos && <Grupo>Avisos: no frenan, pero conviene mirarlos</Grupo>}
+      {errores.map((p, n) => (
+        <Alerta key={`e${n}`} frena={false} titulo={tituloProblema(p)} sku={p.sku} descripcion={p.descripcion}
+          acciones={acciones(p)}>{p.mensaje}</Alerta>
+      ))}
+      {estado.avisos[unidad].map((a, n) => <Alerta key={`a${n}`} frena={false} titulo="Para tener en cuenta">{a}</Alerta>)}
+      {avisos.map((p, n) => (
+        <Alerta key={`p${n}`} frena={false} titulo={tituloProblema(p)} sku={p.sku} descripcion={p.descripcion}
+          acciones={acciones(p)}>{p.mensaje}</Alerta>
+      ))}
       {eligiendo && <FilaDialog repetido={eligiendo} onCerrar={() => setEligiendo(undefined)} />}
       {canalesDe && <CanalesDialog sku={canalesDe} estado={estado} onCerrar={() => setCanalesDe(undefined)} />}
       {categorias && <CategoriasDialog estado={estado} onCerrar={() => setCategorias(false)} />}
@@ -424,13 +530,6 @@ const Pendientes = ({ estado, unidad, enMatriz }: { estado: Estado; unidad: Unid
     </Box>
   );
 };
-
-const ChipCierre = ({ unidad, cierra }: { unidad: Unidad; cierra: boolean }) => (
-  <Chip
-    size="small" variant="outlined" label={`${UNIDADES[unidad].nombre}: ${cierra ? 'cierra' : 'no cierra'}`}
-    sx={{ borderColor: cierra ? CIERRA : NO_CIERRA, color: cierra ? CIERRA : NO_CIERRA, fontWeight: 700 }}
-  />
-);
 
 const Seccion = ({ titulo, resumen, abierta = false, pedido, ayuda, children }: {
   titulo: string; resumen?: React.ReactNode; abierta?: boolean; pedido?: number;
@@ -621,13 +720,16 @@ export const MovilPage = () => {
   }
 
   const bloquean = estado.inconsistencias[unidad].length;
+  const otraUnidad: Unidad = unidad === 'kilos' ? 'plata' : 'kilos';
+  const otraNoCierra = !estado.cierra[otraUnidad] && !estado.faltan.length;
   const paraRevisar = estado.problemas.length + estado.avisos[unidad].length;
   // Se abre sola si algo bloquea o si hay un aviso que pide una decisión (no solo mirar).
   const decidir = !estado.aprobado && estado.es_ultimo
     && estado.problemas.some(p => p.tipo === 'sku_repetido' || p.tipo === 'sin_categoria');
-  const resumen = !bloquean && !paraRevisar ? <Dato>Nada</Dato> : (
+  const resumen = !bloquean && !paraRevisar && !otraNoCierra ? <Dato>Nada</Dato> : (
     <>
       {bloquean > 0 && <Typography variant="body2" sx={{ color: NO_CIERRA }}>{UNIDADES[unidad].nombre} no cierra</Typography>}
+      {otraNoCierra && <Typography variant="body2" sx={{ color: NO_CIERRA }}>{UNIDADES[otraUnidad].nombre} no cierra</Typography>}
       {paraRevisar > 0 && (
         <Chip size="small" color="warning" variant="outlined" label={`${paraRevisar} ${paraRevisar === 1 ? 'aviso' : 'avisos'}`} />
       )}
@@ -675,8 +777,16 @@ export const MovilPage = () => {
                     size="small" exclusive value={unidad} aria-label="Unidad de la matriz"
                     onChange={(_, u: Unidad | null) => u && elegirUnidad(u)}
                   >
-                    <ToggleButton value="kilos">{UNIDADES.kilos.nombre}</ToggleButton>
-                    <ToggleButton value="plata">{UNIDADES.plata.nombre}</ToggleButton>
+                    {/* Cada unidad dice si cierra: así se ve cuál mirar sin tener que entrar a las dos. */}
+                    {(['kilos', 'plata'] as const).map(u => (
+                      <ToggleButton key={u} value={u} aria-label={`${UNIDADES[u].nombre}: ${estado.cierra[u] ? 'cierra' : 'no cierra'}`}
+                        sx={{ gap: 0.75, px: 1.5, fontWeight: 600, color: estado.cierra[u] ? CIERRA : NO_CIERRA,
+                          '&.Mui-selected': { color: estado.cierra[u] ? CIERRA : NO_CIERRA,
+                            bgcolor: alpha(estado.cierra[u] ? CIERRA : NO_CIERRA, 0.1) } }}>
+                        {estado.cierra[u] ? <CheckCircleRoundedIcon sx={{ fontSize: 16 }} /> : <ErrorRoundedIcon sx={{ fontSize: 16 }} />}
+                        {UNIDADES[u].nombre}{estado.cierra[u] ? '' : ': no cierra'}
+                      </ToggleButton>
+                    ))}
                   </ToggleButtonGroup>
                 </>
               )}
@@ -687,8 +797,6 @@ export const MovilPage = () => {
                   : estado.aprobado ? <ChipEstado texto="Aprobado" />
                     : (
                       <>
-                        <ChipCierre unidad="kilos" cierra={estado.cierra.kilos} />
-                        <ChipCierre unidad="plata" cierra={estado.cierra.plata} />
                         <ResumenEtapas estado={estado} />
                       </>
                     )}
@@ -817,7 +925,7 @@ export const MovilPage = () => {
         </Seccion>
 
         {estado.faltan.length === 0 && (
-          <Seccion titulo="Para revisar" abierta={bloquean > 0 || decidir} ayuda={AYUDA.revisar} resumen={resumen}>
+          <Seccion titulo="Para revisar" abierta={bloquean > 0 || otraNoCierra || decidir} ayuda={AYUDA.revisar} resumen={resumen}>
             <Pendientes estado={estado} unidad={unidad} enMatriz={new Set(cruce?.skus.map(x => x.codigo))} />
           </Seccion>
         )}

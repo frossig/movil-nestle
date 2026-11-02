@@ -172,7 +172,7 @@ describe('MovilPage', { timeout: 15000 }, () => {
     const user = userEvent.setup({ delay: null });
     render(<MovilPage />);
     await user.click(await screen.findByRole('button', { name: /^Para revisar/ }));
-    expect(screen.getByText(/Producto de otro país/)).toBeVisible();
+    expect(screen.getByText('Producto de otro país.')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Ir al SKU 999' })).not.toBeInTheDocument();
   });
 
@@ -366,8 +366,9 @@ describe('MovilPage', { timeout: 15000 }, () => {
       problemas: [{ severidad: 'error', mensaje: 'Rosario no se puede abrir.', sku: '100', bloque: 'apertura', canal: 'Catering' }],
     }))));
     render(<MovilPage />);
-    expect((await screen.findByText('No cierra por esto.')).closest('.MuiAlert-standardError')).not.toBeNull();
-    expect(screen.getByText(/Rosario no se puede abrir/).closest('.MuiAlert-standardWarning')).not.toBeNull();
+    // Frena: tarjeta de alerta (borde rojo). Lo del archivo es aviso: no se anuncia como alerta.
+    expect((await screen.findByText('No cierra por esto.')).closest('[role="alert"]')).not.toBeNull();
+    expect(screen.getByText(/Rosario no se puede abrir/).closest('[role="alert"]')).toBeNull();
   });
 
   it('exportar con cosas para revisar pide confirmar y las muestra', async () => {
@@ -620,6 +621,48 @@ describe('MovilPage', { timeout: 15000 }, () => {
     render(<MovilPage />);
     await user.click(await screen.findByRole('button', { name: 'Repartir la diferencia' }));
     expect(await screen.findByRole('dialog', { name: 'Repartir la diferencia en kilos' })).toBeInTheDocument();
+  });
+
+  it('mirando kilos, Para revisar avisa que los pesos no cierran y lleva a verlos', async () => {
+    const mensaje = 'A Catering les piden $ 100,00, pero los SKUs que se vendieron ahí el mes anterior suman $ 50,00: faltan $ 50,00.';
+    server.use(http.get('*/api/movil', () => HttpResponse.json(estado({
+      cierra: { kilos: true, plata: false },
+      inconsistencias: { kilos: [], plata: [inconsistenciaFactory.build({ tipo: 'canales_sin_volumen', mensaje })] },
+    }))));
+    const user = userEvent.setup({ delay: null });
+    render(<MovilPage />);
+    expect(await screen.findByText(/La herramienta los puede proponer/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Ver en pesos' }));
+    expect(await screen.findByText(mensaje)).toBeInTheDocument();
+  });
+
+  it('si los kilos cierran y los pesos no, propone los pesos según los kilos, con motivo', async () => {
+    let motivo: string | undefined;
+    server.use(
+      http.get('*/api/movil', () => HttpResponse.json(estado({ cierra: { kilos: true, plata: false } }))),
+      http.post('*/api/movil/totales/pesos', async ({ request }) => {
+        motivo = ((await request.json()) as { motivo: string }).motivo;
+        return HttpResponse.json(estado());
+      }),
+    );
+    const user = userEvent.setup({ delay: null });
+    render(<MovilPage />);
+    await user.click(await screen.findByRole('button', { name: 'Proponer pesos según los kilos' }));
+    await user.type(screen.getByRole('textbox', { name: /Motivo/ }), 'pesos coherentes con los kilos');
+    await user.click(screen.getByRole('button', { name: 'Proponer pesos' }));
+    await waitFor(() => expect(motivo).toBe('pesos coherentes con los kilos'));
+  });
+
+  it('al armar los totales, si el mes anterior trae pesos, también arranca con ellos', async () => {
+    const sinTotales = estado({ faltan: ['totales por canal'] });
+    sinTotales.entradas.input2 = null;
+    sinTotales.entradas.base!.canales = [{ canal: 'Catering', kilos: '950.000', plata: '12345.67' }];
+    server.use(http.get('*/api/movil', () => HttpResponse.json(sinTotales)));
+    const user = userEvent.setup({ delay: null });
+    render(<MovilPage />);
+    await user.click(await screen.findByRole('button', { name: 'Armar totales por canal en la pantalla' }));
+    expect(await screen.findByText(/Arranca con los canales, los kilos y los pesos/)).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Pesos de Catering' })).toHaveValue('12.345,67');
   });
 
   it('a los SKUs sin categoría se les asigna una desde Para revisar', async () => {
