@@ -9,7 +9,7 @@ import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import { useProfile } from '../../../../stores/useProfile';
 import { ReiniciarDialog } from '../../../pages/Movil/ReiniciarDialog';
 import { MesesMenu } from '../../../pages/Movil/MesesMenu';
-import { cerrarSesion, conEntra } from '../../../../infra/auth';
+import { cerrarSesion, conEntra, puedeReiniciar } from '../../../../infra/auth';
 
 
 interface SidebarItem {
@@ -66,10 +66,10 @@ const LeftMenu = () => {
           <IconMenu
             id="profile-menu"
             links={conEntra() ? [] : [{ name: 'Logout', location: '/signout' }]}
-            // Solo en la instalación local: para practicar la demo desde un mes vacío.
+            // Empezar de cero: en local o en un entorno de prueba que lo permite (PERMITIR_REINICIAR).
             acciones={[
               ...(conEntra() ? [{ name: 'Cerrar sesión', onClick: () => cerrarSesion() }] : []),
-              ...(import.meta.env.DEV ? [{ name: 'Empezar de cero', onClick: () => setReiniciando(true) }] : []),
+              ...(puedeReiniciar() ? [{ name: 'Empezar de cero', onClick: () => setReiniciando(true) }] : []),
             ]}
             icon={<ExpandMoreRoundedIcon />}
             anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
