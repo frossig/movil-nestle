@@ -18,7 +18,7 @@ export const AYUDA = {
           <b>Totales por canal</b>: cuánto tiene que vender cada canal, en kilos y en pesos. Lo define el planner. Se
           sube en Excel o se arma en la pantalla («Armar en pantalla»): si ya cargaste el mes anterior, arranca con sus
           canales y sus kilos, y con sus pesos si el archivo los trae. Mientras escribís ves cuánto falta o sobra en
-          kilos, y «Ajustar a Contraloría» lo reparte entre los canales. Si faltan pesos, «Completar con los
+          kilos, y «Repartir lo que sobra» o «Repartir lo que falta» lo reparte entre los canales en proporción a los kilos de cada uno. Si faltan pesos, «Completar con los
           sugeridos» los calcula con los kilos y el precio de cada SKU en cada canal.
         </P>
         <P>
@@ -89,7 +89,7 @@ export const AYUDA = {
           y quedan en la hoja Problemas del Excel.
         </P>
         <P>
-          Los botones lo resuelven ahí mismo (repartir la diferencia, elegir canales, elegir la fila, ver la celda).
+          Los botones lo resuelven ahí mismo (corregir los totales, elegir canales, elegir la fila, ver la celda).
           «Ir a…» solo te lleva a donde mirarlo: la regla o la fila del SKU en la tabla.
         </P>
       </>
@@ -116,7 +116,7 @@ export const AYUDA = {
         <P>
           Tocá una celda para fijarla a mano (queda en azul con un pin y el resto se reacomoda) o para ver cómo se
           abre entre distribuidores y vendedores. El interruptor de cada fila saca al SKU del mes: sus kilos y pesos
-          dejan de sumar, y hay que repartir esa diferencia entre los canales.
+          dejan de sumar, y se corrigen en Totales por canal.
         </P>
       </>
     ),
