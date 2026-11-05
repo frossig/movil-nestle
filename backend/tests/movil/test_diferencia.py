@@ -134,3 +134,29 @@ def test_los_pesos_se_proponen_segun_los_kilos_y_cierran():
 def test_sin_kilos_cerrados_no_se_proponen_pesos():
     s = _corta()  # los kilos no cierran
     assert _falla(s.proponer_pesos, P, CUANDO, "x")
+
+
+def test_al_armar_los_totales_sin_pesos_se_sugieren_segun_los_kilos():
+    """Armar los totales sin pesos: la pantalla los sugiere, al precio de cada canal en el mes anterior."""
+    s = _sesion()
+    kilos = {"Catering": "1.000", "Rosario": "1.000", "Canal nuevo": "1.000", "Sin kilos": ""}
+    pesos = {c: D(v) for c, v in s.pesos_para(kilos).items()}
+    assert set(pesos) == {"Catering", "Rosario", "Canal nuevo"}
+    assert sum(pesos.values()) == s._pide("plata")  # suman exacto lo de Contraloría
+    assert pesos["Catering"] != pesos["Rosario"]  # mismo kilos, distinto precio según lo que vendió cada uno
+    assert s.historial[-1].accion == "cargar_base"  # no cambia nada
+
+
+def test_los_kilos_que_se_arman_en_la_pantalla_se_comparan_con_contraloria_sin_guardar():
+    s = _sesion()
+    pide = s._pide("kilos")
+    mitad = a_texto((pide / 2).quantize(D("0.001")))
+    r = s.revisar_kilos({"Catering": mitad, "Vending": "1.000"})
+    assert D(r["falta"]) > 0 and not r["cierra"]
+    assert sum(D(v) for v in r["ajustados"].values()) == pide  # ajustados según su peso, cierran
+    r = s.revisar_kilos(r["ajustados"])
+    assert r["cierra"] and r["falta"] == "0.000"
+    casi = {**r["ajustados"], "Vending": str(D(r["ajustados"]["Vending"]) + D("0.4"))}
+    assert s.revisar_kilos(casi)["se_reparte_solo"]  # un redondeo: se reparte solo al guardar
+    assert s.revisar_kilos({"Catering": "abc"})["errores"] == {"Catering": "no es un número"}
+    assert s.historial[-1].accion == "cargar_base"  # no cambia nada
