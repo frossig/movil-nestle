@@ -42,10 +42,12 @@ transacción: si el recálculo falla, vuelve al estado anterior.
   medio minuto.
 - **El mes siguiente** (`Repositorio.empezar_siguiente`) exige el último aprobado y
   arranca con `heredar(foto)`: el reparto aprobado es la base, y se heredan totales por
-  canal, reglas, %, entidades apagadas, categorías y canales cerrados. La foto va dentro
+  canal, reglas, %, entidades apagadas, categorías, canales cerrados y lo que valió cada
+  kilo de cada SKU en cada canal. La foto va dentro
   del comando: el mes nuevo no depende de cómo se recalcule el anterior.
-- **Empezar de cero** (menú del usuario, solo en desarrollo; la API responde 403 salvo con
-  IS_LOCAL=true): borra todos los meses y arranca el mes actual vacío. Para practicar la demo.
+- **Empezar de cero** (menú del usuario): borra todos los meses y arranca el mes actual
+  vacío. Solo en local (`IS_LOCAL=true`) o en un entorno de prueba (`PERMITIR_REINICIAR=true`),
+  y solo para un usuario con rol Admin; si no, la API responde 403.
 - **Un mes anterior es de solo lectura** (`Sesion.es_ultimo`): el siguiente ya arrancó de
   su aprobado. La pantalla manda siempre el mes en cada pedido.
 - **Una acción nueva** se guarda sola si deja una entrada en el historial. Sus argumentos
@@ -172,6 +174,28 @@ celda. El cruce no cambia al apagar un distribuidor.
   cada canal. No hace falta una regla aparte.
 - Una celda con base 0 ("aplica con cero") recibe 0: el ajuste biproporcional no
   hace crecer un cero. Si el planner quiere darle algo, la fija.
+- **Precio de cada SKU en cada canal** (pedido del cliente, 05/11): un kilo vale lo que
+  valió ese SKU en ese canal en el reparto del mes anterior (NNS / kilos de la celda);
+  donde no se vendió, lo del período de Participaciones (solo sus tablas de canales); si
+  no hay ninguno, el de Contraloría. Lo usan:
+  - el punto de partida del cruce en pesos: la base en kilos a ese precio (donde se
+    vendió el mes anterior, sus pesos). Kilos y pesos siguen cada uno su historia.
+  - "Proponer pesos": el objetivo en pesos de cada SKU se reparte entre sus canales
+    según kilos × precio, así cada SKU y cada segmento suman exacto.
+  - los pesos sugeridos al armar los totales: los kilos de cada canal por el precio
+    promedio que tuvo ese canal el mes anterior (sin historia, el promedio de
+    Contraloría), llevados al total de Contraloría. Suman exacto el total, no cada
+    segmento: si un segmento no cierra, "Proponer pesos" lo corrige.
+
+  El mes siguiente hereda lo que valió cada kilo en el aprobado.
+  `importer/movil_real.py::precios`, `Sesion._precios`, `Sesion._por_canal`.
+  En Participaciones, Call Center figura con el nombre del proveedor: no matchea y cae al
+  precio del mes anterior o al de Contraloría. Debajo del canal, los pesos se abren
+  con los pesos relativos en kilos de cada entidad.
+- **Categoría de cada SKU**: la del objetivo; si viene vacía, la asignada en la
+  herramienta (en un mes heredado, ahí entran las del aprobado); si tampoco, la de la
+  hoja Móvil Mes del archivo del mes anterior.
+  `Sesion.objetivos_vigentes`.
 
 ## Gotchas
 
@@ -225,7 +249,19 @@ celda. El cruce no cambia al apagar un distribuidor.
   `FormData`. Los tests de la pantalla prueban que se llama a la acción; el pedido
   HTTP lo cubre el test de la API.
 - **Librerías `nbra-*`**: no existen en los registros públicos y no hay que
-  pedirlas ahí (dependency confusion). `make deps-local` usa `local_shims/`.
+  pedirlas ahí (dependency confusion). `make deps-local` usa `local_shims/`. Por lo
+  mismo, `pip-audit` se corre sobre el entorno instalado (`--path` a su
+  `site-packages`), nunca con `-r requirements.txt`, que resolvería las `nbra-*` en PyPI.
+- **Un texto que empieza con `=` en el Excel exportado sería una fórmula**: openpyxl lo
+  guarda así. `exportar` pasa todas las celdas a texto: un canal o una descripción del
+  archivo no puede ejecutar nada al abrirlo.
+- **Un .xlsx o .xlsb es un zip**: uno de pocos MB puede descomprimirse a gigas. `libro()`
+  lo rechaza si descomprimido pasa `DESCOMPRIMIDO_MAXIMO` (500 MB), antes de abrirlo.
+- **Tokens de Entra**: la API exige el permiso `access_as_user` (`scp`). El token de
+  identidad de la misma app también tiene a la app como destinatario, pero no ese permiso.
+- **Repartir pesos entre canales**: nunca escalar todos los canales juntos al total de
+  Contraloría. Los SKUs de Ingredientes y de Soluciones son distintos, y un segmento se
+  llevaría pesos del otro; el cruce no cierra. Se reparte el objetivo de cada SKU.
 
 ## Falta
 
