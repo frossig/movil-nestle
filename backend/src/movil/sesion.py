@@ -36,6 +36,7 @@ from src.importer.entradas import (
     leer_base_plata,
     leer_categorias,
     leer_input1,
+    leer_precios,
     leer_input2,
     normalizar,
     numero,
@@ -96,6 +97,11 @@ class _Entradas:
     problemas_base: list[Problema] = field(default_factory=list)
     archivo_base: str | None = None
     base_plata: dict | None = None  # pesos por canal del mes anterior, si el archivo los trae
+    # Precio por kilo de cada SKU en cada canal {(sku, canal): $/kg}, del mes anterior: un SKU no vale
+    # lo mismo en todos los canales. Vacío si el archivo no lo trae (se usa el de Contraloría).
+    precios: dict = field(default_factory=dict)
+    # La categoría de cada SKU en el mes anterior: completa las que el objetivo trae vacías.
+    categorias_base: dict = field(default_factory=dict)
 
 
 class Sesion:
@@ -224,20 +230,46 @@ class Sesion:
             return Ajuste("repartir_diferencia", detalle, autor, cuando, motivo)
         self._aplicar(cambio)
 
+    def _precios(self):
+        """Lo que vale un kilo de cada SKU en cada canal: el del mes anterior; si no hay, el de Contraloría."""
+        por_celda = {(s, normalizar(c)): p for (s, c), p in self._e.precios.items()}
+        return lambda sku, canal, o: por_celda.get((sku, normalizar(canal))) or o.nns / o.kilos
+
+    def _por_canal(self, kilos: dict[Celda, Decimal], objetivos: dict) -> dict[str, tuple[Decimal, Decimal]]:
+        """
+        El objetivo de cada SKU repartido entre sus canales según `kilos` (SKU × canal): los kilos en
+        proporción a los kilos y los pesos en proporción a lo que facturan, kilos × precio de ese SKU en ese
+        canal. Cada SKU suma exacto su objetivo, así que cada segmento también. {canal: (kilos, pesos)}.
+        """
+        precio = self._precios()
+        por_sku: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
+        for (sku, canal), k in kilos.items():
+            o = objetivos.get(sku)
+            if k and o and o.kilos and o.nns:
+                por_sku.setdefault(sku, {})[canal] = (k, k * precio(sku, canal, o))
+        canales: dict[str, tuple[Decimal, Decimal]] = {}
+        for sku, celdas in por_sku.items():
+            o = objetivos[sku]
+            total_k = sum(k for k, _ in celdas.values())
+            total_p = sum(p for _, p in celdas.values())
+            for canal, (k, p) in celdas.items():
+                antes_k, antes_p = canales.get(canal, (Decimal(0), Decimal(0)))
+                canales[canal] = (antes_k + o.kilos * k / total_k, antes_p + o.nns * p / total_p)
+        return canales
+
     def pesos_segun_kilos(self) -> dict[str, Decimal]:
         """
-        Los pesos de cada canal que van con los kilos ya repartidos: cada SKU factura sus kilos al precio de
-        Contraloría (su NNS sobre sus kilos). Suman exacto lo que pide Contraloría en pesos.
+        Los pesos de cada canal que van con los kilos ya repartidos: cada SKU factura sus kilos al precio que
+        tuvo en ese canal el mes anterior (o, sin historia, al de Contraloría). Suman exacto lo que pide
+        Contraloría en pesos.
         """
         r = self._exigir_recorrido()
         if r.kilos.celdas is None:
             raise ErrorDeAjuste("Primero tienen que cerrar los kilos: los pesos se proponen según cómo se repartieron.")
         objetivos = self.objetivos_vigentes()
         pesos = {c: Decimal(0) for c in self._e.canales}
-        for (sku, canal), kilos in r.kilos.celdas.items():
-            o = objetivos.get(sku)
-            if kilos and o and o.kilos and o.nns:
-                pesos[canal] += kilos * o.nns / o.kilos
+        for canal, (_, plata) in self._por_canal(r.kilos.celdas, objetivos).items():
+            pesos[canal] += plata
         pide = self._pide("plata")
         if pide <= 0 or not any(pesos.values()):
             raise ErrorDeAjuste("El objetivo de Contraloría no tiene pesos: no hay de dónde proponerlos.")
@@ -246,9 +278,9 @@ class Sesion:
     def pesos_para(self, kilos: dict[str, str]) -> dict[str, str]:
         """
         Pesos sugeridos para totales por canal que todavía no los tienen (al armarlos en la pantalla):
-        los kilos de cada canal al precio que tuvo ese canal en el mes anterior, con el precio de
-        Contraloría de cada SKU. Suman exacto lo que pide Contraloría. Un canal sin mes anterior va al
-        precio promedio. Solo lee: no cambia nada.
+        los kilos de cada canal al precio por kilo que tuvo ese canal en el mes anterior, con la mezcla de
+        SKUs que vendió y el precio de cada SKU en ese canal. Suman exacto lo que pide Contraloría. Un canal
+        sin mes anterior va al precio promedio. Solo lee: no cambia nada.
         """
         if self._e.objetivos is None:
             raise ErrorDeAjuste("Cargá el objetivo de Contraloría: los pesos salen de sus precios.")
@@ -258,14 +290,8 @@ class Sesion:
         if pide <= 0:
             raise ErrorDeAjuste("El objetivo de Contraloría no tiene pesos: no hay de dónde proponerlos.")
         promedio = pide / sum((o.kilos for o in activos.values()), Decimal(0))
-        # Kilos y pesos del mes anterior por canal, con los precios de este mes.
-        hubo: dict[str, list[Decimal]] = {}
-        for (sku, canal), k in (self._e.base or {}).items():
-            o = activos.get(sku)
-            if o and k:
-                par = hubo.setdefault(normalizar(canal), [Decimal(0), Decimal(0)])
-                par[0] += k
-                par[1] += k * o.nns / o.kilos
+        # El objetivo de este mes repartido como el mes anterior: qué kilos y qué pesos le tocan a cada canal.
+        hubo = {normalizar(c): v for c, v in self._por_canal(self._e.base or {}, activos).items()}
         valores = {}
         for canal, texto in kilos.items():
             k, error = _monto(texto, UNIDADES["kilos"])
@@ -348,6 +374,15 @@ class Sesion:
         base_plata = leer_base_plata(origen)
         if hasattr(origen, "seek"):
             origen.seek(0)
+        precios = leer_precios(origen)
+        if hasattr(origen, "seek"):
+            origen.seek(0)
+        try:
+            categorias_base = leer_categorias(origen)
+        except ErrorDeEntrada:
+            categorias_base = {}
+        if hasattr(origen, "seek"):
+            origen.seek(0)
         try:
             apertura, problemas_apertura = leer_apertura(origen)
         except ErrorDeEntrada:
@@ -357,6 +392,7 @@ class Sesion:
 
         def cambio():
             self._e.base, self._e.apertura, self._e.base_plata = base, apertura, base_plata
+            self._e.precios, self._e.categorias_base = precios, categorias_base
             self._e.problemas_base, self._e.archivo_base = problemas + problemas_apertura, nombre
             return Ajuste("cargar_base", nombre, autor, cuando)
         self._aplicar(cambio)
@@ -616,9 +652,9 @@ class Sesion:
         for sku, o in self._e.objetivos.items():
             fila = self.filas_elegidas.get(sku, (o.fila, None))[0]
             elegido = next(x for x in [o, *o.alternativas] if x.fila == fila)
-            # La del archivo manda; si no trae, la asignada en la herramienta.
-            if elegido.categoria is None and sku in self.categorias:
-                elegido = replace(elegido, categoria=self.categorias[sku])
+            # La del archivo manda; si no trae, la asignada en la herramienta y si no, la del mes anterior.
+            if elegido.categoria is None and (sku in self.categorias or sku in self._e.categorias_base):
+                elegido = replace(elegido, categoria=self.categorias.get(sku) or self._e.categorias_base[sku])
             vigentes[sku] = elegido
         return vigentes
 
@@ -722,6 +758,8 @@ class Sesion:
             raise ErrorDeAjuste("Solo un móvil aprobado pasa al mes siguiente.")
         return {
             "base": [[sku, canal, str(v)] for (sku, canal), v in sorted(r.kilos.celdas.items())],
+            # Lo que valió cada kilo en el reparto aprobado; donde no hubo, el precio que ya traía.
+            "precios": [[sku, canal, str(p)] for (sku, canal), p in sorted(self._precios_aprobados(r).items())],
             "apertura": [[sku, canal, h.entidad, str(h.valores["kilos"].monto)]
                          for (sku, canal), raiz in sorted(r.aperturas.items()) for h in raiz.hijos],
             "totales": [[c, str(t.kilos), None if t.plata is None else str(t.plata)]
@@ -737,6 +775,14 @@ class Sesion:
                                                  if o.categoria}},
         }
 
+    def _precios_aprobados(self, r: Recorrido) -> dict[Celda, Decimal]:
+        precios = dict(self._e.precios)
+        for (sku, canal), kilos in r.kilos.celdas.items():
+            nns = (r.plata.celdas or {}).get((sku, canal)) if r.plata else None
+            if kilos and nns:
+                precios[(sku, canal)] = nns / kilos
+        return precios
+
     def heredar(self, foto: dict, de: str, autor: str, cuando: datetime) -> None:
         """
         Arranca el mes desde el aprobado de `de`: su reparto es el mes anterior y se heredan
@@ -747,12 +793,14 @@ class Sesion:
         for sku, canal, entidad, v in foto["apertura"]:
             apertura.setdefault((sku, canal), {})[entidad] = Decimal(v)
         canales = {c: TotalCanal(Decimal(k), None if p is None else Decimal(p)) for c, k, p in foto["totales"]}
+        precios = {(sku, canal): Decimal(p) for sku, canal, p in foto.get("precios", [])}
 
         de = nombre_mes(de)
 
         def cambio():
             ajuste = Ajuste("heredar", f"Arrancó desde el móvil aprobado de {de}", autor, cuando)
             self._e.base, self._e.apertura, self._e.problemas_base = base, apertura, []
+            self._e.precios = precios
             self._e.archivo_base = f"Móvil aprobado de {de}"
             self._e.canales, self._e.problemas2, self._e.archivo2 = canales, [], f"Totales de {de}"
             for id_, canal, categorias, limite, kilos, nns in foto["reglas"]:
@@ -932,6 +980,7 @@ class Sesion:
                 reglas=[r.regla for r in self.reglas.values()],
                 canales_sku={k: c for k, (c, _) in self.canales_sku.items()},
                 porcentajes=porcentajes,
+                precios=self._e.precios,
             )
         except ErrorDeCruce as e:
             raise ErrorDeAjuste(str(e)) from e
