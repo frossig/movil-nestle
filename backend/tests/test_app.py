@@ -42,7 +42,7 @@ class TestApp(unittest.TestCase):
         self.assertEqual(response.json(), "OK")
 
     def test_sin_entra_fuera_de_local_avisa_que_no_hay_login(self):
-        sin_entra = {k: v for k, v in environ.items() if not k.startswith("ENTRA_")}
+        sin_entra = {k: v for k, v in environ.items() if not k.startswith("ENTRA_") and k != "DATABASE_URL"}
         with patch.dict(environ, {**sin_entra, "IS_LOCAL": "false"}, clear=True), \
                 self.assertLogs(logger, "WARNING") as avisos:
             crear_app()
